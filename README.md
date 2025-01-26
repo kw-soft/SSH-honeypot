@@ -1,146 +1,163 @@
-# SSH Tarpit
+# SSH Tarpit with Extended PostgreSQL Logging
 
-An SSH tarpit implemented in Python using `paramiko` to trap and slow down brute-force attacks by keeping connections open and delaying interactions. All login attempts are logged in a PostgreSQL database.
+An SSH tarpit implemented in Python using **Paramiko**. This script traps and slows down brute-force attacks by artificially delaying SSH authentication attempts and never granting access. It logs various data to **PostgreSQL** in three separate tables:
+
+1. **`login_attempts`** – IP, port, username, and password for each attempt.  
+2. **`harvested_credentials`** – Only username and password, plus a timestamp.  
+3. **`ip_access`** – Logs only the IP address and a timestamp when a connection arrives.
+
+---
 
 ## Features
 
-- **Simulated SSH Server**: Uses a fake SSH server to handle incoming SSH connection attempts.
-- **Connection Persistence**: Keeps connections alive indefinitely or until the server is stopped.
-- **Login Attempt Logging**: Logs every login attempt with the username, password, and client IP in a PostgreSQL database.
-- **Artificial Delays**: Introduces delays in authentication and interactions to frustrate attackers.
-- **Graceful Shutdown**: Allows for clean termination of the server and all active connections using `Ctrl+C`.
+- **Simulated SSH Server**: Uses a fake SSH server to handle incoming SSH connections.
+- **Connection Persistence**: Maintains connections indefinitely or until the server is stopped.
+- **Multiple PostgreSQL Tables**:
+  - **`login_attempts`**: Full details of login attempts.
+  - **`harvested_credentials`**: Minimal credentials-only storage.
+  - **`ip_access`**: Tracks IP address upon connection.
+- **Config-Driven**: Loads database credentials from a local `config.json` file.
+- **Graceful Shutdown**: Stops cleanly with `Ctrl+C`, terminating all active connections.
+
+---
 
 ## Requirements
 
-- Python 3.x
-- `paramiko` library
-- `psycopg2` library
+1. **Python 3.x**  
+2. **Paramiko** and **Psycopg2** libraries:
+    ```bash
+    pip install paramiko psycopg2
+    ```
+3. **PostgreSQL** server with the following tables:
 
-Install the required libraries using pip:
+### Database Setup
 
-```bash
-pip install paramiko psycopg2
+```sql
+-- 1) Full login attempts
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id SERIAL PRIMARY KEY,
+    ip VARCHAR(50),
+    port INTEGER,
+    username VARCHAR(100),
+    password VARCHAR(100),
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2) Harvested credentials (username/password only)
+CREATE TABLE IF NOT EXISTS harvested_credentials (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100),
+    password VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 3) IP access log (only IP and timestamp)
+CREATE TABLE IF NOT EXISTS ip_access (
+    id SERIAL PRIMARY KEY,
+    ip VARCHAR(50),
+    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
-## Database Setup
+---
 
-1. Install PostgreSQL and create a database:
+## Configuration
 
-   ```bash
-   sudo -u postgres psql
-   CREATE DATABASE ssh_tarpit;
-   CREATE USER your_user WITH PASSWORD 'your_password';
-   GRANT ALL PRIVILEGES ON DATABASE ssh_tarpit TO your_user;
-   ```
+Create a file named `config.json` (excluded from Git with `.gitignore`) in the project folder. It should look like this:
 
-2. Create a `config.json` file in the project directory with the following content:
+```json
+{
+    "host": "localhost",
+    "port": 5432,
+    "database": "ssh_tarpit",
+    "user": "myuser",
+    "password": "mypassword"
+}
+```
 
-   ```json
-   {
-       "host": "localhost",
-       "port": 5432,
-       "database": "ssh_tarpit",
-       "user": "your_user",
-       "password": "your_password"
-   }
-   ```
+Adjust the values as needed to match your PostgreSQL setup.
 
-3. Run the server to ensure it connects and logs correctly:
-
-   ```bash
-   python3 ssh_tarpit.py
-   ```
+---
 
 ## Usage
 
-### Clone the Repository
+1. **Clone the Repository**:
+    ```bash
+    git clone <repository-url>
+    cd <repository-folder>
+    ```
 
-```bash
-git clone <repository-url>
-cd <repository-folder>
+2. **Create and Edit `config.json`**:
+    ```bash
+    cp config.example.json config.json
+    # Edit config.json to match your PostgreSQL credentials
+    ```
+
+3. **Install Dependencies**:
+    ```bash
+    pip install paramiko psycopg2
+    ```
+
+4. **Run the SSH Tarpit**:
+    ```bash
+    python3 main.py
+    ```
+    You should see:
+    ```
+    [+] SSH Tarpit running on 0.0.0.0:2222
+    ```
+
+5. **Test the Tarpit**:
+    - From another machine or terminal:
+      ```bash
+      ssh -p 2222 anyuser@<your-ip-or-hostname>
+      ```
+    - Provide any password; the script will:
+      - Record an **IP-only entry** in `ip_access`.
+      - Store the **full attempt** in `login_attempts` (IP, port, username, password).
+      - Store only **credentials** in `harvested_credentials` (username, password).
+
+6. **Stop the Tarpit**:
+    - Press `Ctrl + C` in the terminal running the script.
+    - You should see:
+      ```
+      [!] Stopping server...
+      [+] Server has been stopped.
+      ```
+
+---
+
+## Verifying Logs in PostgreSQL
+
+You can verify your logs with commands like:
+
+```sql
+-- 1) Full login attempts
+SELECT * FROM login_attempts;
+
+-- 2) Harvested credentials
+SELECT * FROM harvested_credentials;
+
+-- 3) IP access logs
+SELECT * FROM ip_access;
 ```
 
-### Run the Server
+---
 
-```bash
-python3 ssh_tarpit.py
-```
+## Security Considerations
 
-### Connect to the Tarpit
+- This tarpit is designed for **research and defensive security** purposes. Always ensure you have permission to run such a service on your network or system.
+- Deploy it in an **isolated environment** (e.g., a VM or a dedicated server) since it is deliberately attracting malicious traffic.
 
-Using an SSH client, connect to the tarpit server:
-
-```bash
-ssh -p 2222 <any-username>@<server-ip>
-```
-
-- Use any username and password.
-- The server will log the login attempt to the database and artificially delay the response.
-
-### Stop the Server
-
-Press `Ctrl+C` to gracefully stop the server:
-
-```bash
-[!] Stopping server...
-[+] Server has been stopped.
-```
-
-## File Overview
-
-- `ssh_tarpit.py`: The main script to run the SSH tarpit server.
-- `config.json`: Configuration file for database connection details (not included in the repository).
-
-## How It Works
-
-1. The server simulates an SSH interface using `paramiko`.
-2. All incoming connection attempts are delayed to slow down brute-force attacks.
-3. Connections are kept alive indefinitely until the server is stopped or the attacker disconnects.
-4. All login attempts (username, password, and IP) are logged in a PostgreSQL database for later analysis.
-
-## Notes
-
-- **Legal Considerations**: Ensure you have permission to deploy this tarpit. Use it only in environments where you are authorized to monitor and trap SSH traffic.
-- **Security**: Deploy this tarpit on a secured environment, such as a virtual machine or isolated network.
-
-## Example Output
-
-### Server Startup
-
-```bash
-[+] SSH Tarpit running on 0.0.0.0:2222
-```
-
-### Connection Attempt
-
-```bash
-[+] New connection from ('127.0.0.1', 54321)
-[!] Login attempt: user:password
-[+] Keeping connection to ('127.0.0.1', 54321) active...
-```
-
-### Database Log
-
-Example entry in the PostgreSQL database:
-
-```
- id |    ip      | port  | username |  password   |      timestamp      
-----+------------+-------+----------+-------------+---------------------
- 1  | 127.0.0.1  | 54321 | user     | password123 | 2025-01-26 15:00:00
-```
-
-### Server Shutdown
-
-```bash
-[!] Stopping server...
-[+] Server has been stopped.
-```
+---
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for more details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
 
 ## Contributing
 
-Feel free to open issues or submit pull requests if you have ideas for improvement or additional features.
+Contributions, issues, and feature requests are welcome! Feel free to open an issue or submit a pull request.
 

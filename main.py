@@ -7,6 +7,7 @@ import time
 import signal
 import sys
 import select
+from datetime import datetime
 
 # -------------------------------------------------------------------
 # 1) Load database configuration from config.json
@@ -30,11 +31,13 @@ def load_db_config(config_file="config.json"):
 db_config = load_db_config()
 
 # -------------------------------------------------------------------
-# 2) Function to store login attempts in the PostgreSQL database
+# 2) Functions to store data in PostgreSQL
 # -------------------------------------------------------------------
+
 def store_login_attempt(ip, port, username, password):
     """
-    Stores a login attempt in the PostgreSQL database.
+    Stores a full login attempt in the 'login_attempts' table,
+    including IP, port, username, and password.
     """
     try:
         conn = psycopg2.connect(
@@ -44,7 +47,6 @@ def store_login_attempt(ip, port, username, password):
             user=db_config["user"],
             password=db_config["password"]
         )
-
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -57,7 +59,63 @@ def store_login_attempt(ip, port, username, password):
         cursor.close()
         conn.close()
     except Exception as e:
-        print(f"[-] Error storing attempt in DB: {e}")
+        print(f"[-] Error storing full attempt in DB: {e}")
+
+
+def store_credentials_only(username, password):
+    """
+    Stores only username and password in the 'harvested_credentials' table,
+    along with a timestamp (created_at).
+    """
+    try:
+        conn = psycopg2.connect(
+            host=db_config["host"],
+            port=db_config["port"],
+            database=db_config["database"],
+            user=db_config["user"],
+            password=db_config["password"]
+        )
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO harvested_credentials (username, password, created_at)
+            VALUES (%s, %s, %s)
+            """,
+            (username, password, datetime.now())
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[-] Error storing credentials in DB: {e}")
+
+
+def store_ip_access(ip):
+    """
+    Stores only the IP address in the 'ip_access' table,
+    along with a timestamp (accessed_at).
+    """
+    try:
+        conn = psycopg2.connect(
+            host=db_config["host"],
+            port=db_config["port"],
+            database=db_config["database"],
+            user=db_config["user"],
+            password=db_config["password"]
+        )
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO ip_access (ip, accessed_at)
+            VALUES (%s, %s)
+            """,
+            (ip, datetime.now())
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[-] Error storing IP access in DB: {e}")
 
 # -------------------------------------------------------------------
 # 3) SSH Tarpit Logic
@@ -77,7 +135,7 @@ class PersistentTarpitSSHServer(paramiko.ServerInterface):
     def __init__(self, ip, port):
         super().__init__()
         self.ip = ip
-        self.port = port
+        self.port = 22
 
     def check_channel_request(self, kind, chanid):
         if kind == 'session':
@@ -88,8 +146,11 @@ class PersistentTarpitSSHServer(paramiko.ServerInterface):
         # Log the attempt
         print(f"[!] Login attempt: {username}:{password}")
 
-        # Store in the database
-        store_login_attempt(self.ip, 22, username, password)
+        # 1) Store the full attempt in 'login_attempts'
+        store_login_attempt(self.ip, self.port, username, password)
+
+        # 2) Store only credentials (username & password) in 'harvested_credentials'
+        store_credentials_only(username, password)
 
         # Artificial delay (tarpit effect)
         time.sleep(2)
@@ -102,6 +163,10 @@ def handle_persistent_tarpit(client_socket, client_address):
     print(f"[+] Connection from {client_address}")
     transport = None
     active_connections.append(client_socket)  # Track the socket
+
+    # 3) Store IP access (we log the IP address as soon as a new connection arrives)
+    store_ip_access(client_address[0])
+
     try:
         transport = paramiko.Transport(client_socket)
         transport.add_server_key(HOST_KEY)
