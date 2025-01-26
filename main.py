@@ -226,7 +226,7 @@ def start_persistent_tarpit(host='0.0.0.0', port=2222):
                     target=handle_persistent_tarpit,
                     args=(client_socket, client_address)
                 )
-                client_thread.setDaemon(True)  # Ensure threads exit properly
+                client_thread.daemon = True  # Ensure threads exit properly
                 client_thread.start()
     except Exception as e:
         if not stop_event.is_set():
